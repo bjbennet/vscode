@@ -820,7 +820,6 @@ export interface INotebookDiffResult {
 }
 
 export interface INotebookCellStatusBarItem {
-	// readonly cellResource?: URI; // delete
 	readonly alignment: CellStatusbarAlignment;
 	readonly priority?: number;
 	readonly text: string;
@@ -828,6 +827,7 @@ export interface INotebookCellStatusBarItem {
 	readonly command?: string | Command;
 	readonly accessibilityInformation?: IAccessibilityInformation;
 	readonly opacity?: string;
+	readonly onlyShowWhenActive?: boolean;
 }
 
 export interface INotebookCellStatusBarItemList {
