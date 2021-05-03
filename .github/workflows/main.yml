@@ -1,0 +1,21 @@
+name: Create codespaces prebuild
+on: 
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  createPrebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - id: create-prebuild-development
+        run: |
+          curl -X "POST" "https://api.github.com/vscs_internal/user/bjbennet/codespaces/prebuild" \
+          -H 'Content-Type: application/json; charset=utf-8' \
+          -H 'Authorization: token ${{ secrets.CODESPACE_BUILD_BOT_TOKEN }}' \
+          -d $'{ 
+          "ref": "main",
+          "repository_id": 346135376,
+          "location": "WestUs2",
+          "vscs_target": "development"
+          }'
