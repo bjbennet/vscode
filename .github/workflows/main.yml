@@ -15,7 +15,7 @@ jobs:
           -H 'Authorization: token ${{ secrets.GITHUB_TOKEN }}' \
           -d $'{ 
           "ref": "main",
-          "repository_id": 346135376,
+          "repository_id": 357687256,
           "location": "WestUs2",
           "vscs_target": "development"
           }'
