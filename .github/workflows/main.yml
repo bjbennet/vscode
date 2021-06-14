@@ -17,5 +17,6 @@ jobs:
           "ref": "main",
           "repository_id": 357687256,
           "location": "WestUs2",
-          "vscs_target": "development"
+          "vscs_target": "local",
+          "vscs_target_url": "https://codespaces.servicebus.windows.net/brbenn"
           }'
