@@ -47,25 +47,25 @@ export interface IConfigurationCache {
 
 }
 
-export type UntrustedSettings = {
+export type RestrictedSettings = {
+	default: ReadonlyArray<string>;
 	userLocal?: ReadonlyArray<string>;
 	userRemote?: ReadonlyArray<string>;
 	workspace?: ReadonlyArray<string>;
 	workspaceFolder?: ResourceMap<ReadonlyArray<string>>;
-	all?: ReadonlyArray<string>;
 };
 
 export const IWorkbenchConfigurationService = refineServiceDecorator<IConfigurationService, IWorkbenchConfigurationService>(IConfigurationService);
 export interface IWorkbenchConfigurationService extends IConfigurationService {
 	/**
-	 * List of untrusted settings
+	 * Restricted settings defined in each configuraiton target
 	 */
-	readonly unTrustedSettings: UntrustedSettings;
+	readonly restrictedSettings: RestrictedSettings;
 
 	/**
-	 * Event that triggers when the list of untrusted settings changes
+	 * Event that triggers when the restricted settings changes
 	 */
-	readonly onDidChangeUntrustdSettings: Event<UntrustedSettings>;
+	readonly onDidChangeRestrictedSettings: Event<RestrictedSettings>;
 
 	/**
 	 * A promise that resolves when the remote configuration is loaded in a remote window.

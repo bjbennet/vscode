@@ -12,10 +12,6 @@
 	overflow: hidden;
 }
 
-.settings-editor .codicon {
-	color: inherit !important;
-}
-
 .settings-editor:focus {
 	outline: none !important;
 }
@@ -388,13 +384,18 @@
 	-webkit-user-select: text;
 }
 
-.settings-editor > .settings-body > .settings-tree-container .setting-item-contents .setting-item-trust-description {
+.settings-editor > .settings-body > .settings-tree-container .setting-item.setting-item-untrusted > .setting-item-contents .setting-item-trust-description {
 	display: flex;
+	font-weight: 600;
 	margin: 6px 0 12px 0;
 }
 
-.settings-editor > .settings-body > .settings-tree-container .setting-item-contents .setting-item-trust-description > span {
+.settings-editor > .settings-body > .settings-tree-container .setting-item.setting-item-untrusted > .setting-item-contents .setting-item-trust-description > span {
 	padding-right: 5px;
+}
+
+.settings-editor > .settings-body > .settings-tree-container .setting-item.setting-item-untrusted > .setting-item-contents .setting-item-trust-description > span.codicon.codicon-workspace-untrusted {
+	color: var(--workspace-trust-state-untrusted-color) !important;
 }
 
 .settings-editor > .settings-body > .settings-tree-container .setting-item-contents .setting-item-validation-message {
@@ -567,4 +568,17 @@
 
 .settings-editor.search-mode > .settings-body .settings-toc-container .monaco-list-row .settings-toc-count {
 	display: block;
+}
+
+.settings-editor > .settings-body > .settings-tree-container .setting-list-widget .setting-list-object-list-row.select-container {
+	width: 320px;
+}
+.settings-editor > .settings-body > .settings-tree-container .setting-list-widget .setting-list-object-list-row.select-container > select {
+	width: inherit;
+}
+
+.settings-editor > .settings-body > .settings-tree-container .setting-item-bool .codicon,
+.settings-editor > .settings-body .settings-toc-container .monaco-list-row.focused .codicon,
+.settings-editor > .settings-body .settings-tree-container .monaco-list-row.focused .setting-item-contents .setting-toolbar-container > .monaco-toolbar .codicon {
+	color: inherit !important;
 }

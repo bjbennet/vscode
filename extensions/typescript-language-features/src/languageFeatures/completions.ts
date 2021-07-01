@@ -60,6 +60,7 @@ class MyCompletionItem extends vscode.CompletionItem {
 		public readonly tsEntry: Proto.CompletionEntry,
 		private readonly completionContext: CompletionContext,
 		public readonly metadata: any | undefined,
+		client: ITypeScriptServiceClient,
 	) {
 		super(tsEntry.name, MyCompletionItem.convertKind(tsEntry.kind));
 
@@ -71,17 +72,16 @@ class MyCompletionItem extends vscode.CompletionItem {
 			// Render "fancy" when source is a workspace path
 			const qualifierCandidate = vscode.workspace.asRelativePath(tsEntry.source);
 			if (qualifierCandidate !== tsEntry.source) {
-				this.label2 = { name: tsEntry.name, qualifier: qualifierCandidate };
+				this.label = { label: tsEntry.name, description: qualifierCandidate };
 			}
 
 		} else {
 			this.sortText = tsEntry.sortText;
 		}
 
-		// @ts-expect-error until 4.3 protocol update
-		if (tsEntry.sourceDisplay) {
-			// @ts-expect-error
-			this.label2 = { name: tsEntry.name, qualifier: Previewer.plain(tsEntry.sourceDisplay) };
+		const { sourceDisplay, isSnippet } = tsEntry;
+		if (sourceDisplay) {
+			this.label = { label: tsEntry.name, description: Previewer.plainWithLinks(sourceDisplay, client) };
 		}
 
 		this.preselect = tsEntry.isRecommended;
@@ -90,10 +90,7 @@ class MyCompletionItem extends vscode.CompletionItem {
 
 		this.range = this.getRangeFromReplacementSpan(tsEntry, completionContext);
 		this.commitCharacters = MyCompletionItem.getCommitCharacters(completionContext, tsEntry);
-		// @ts-expect-error until 4.3 protocol update
-		this.insertText = tsEntry.isSnippet && tsEntry.insertText
-			? new vscode.SnippetString(tsEntry.insertText)
-			: tsEntry.insertText;
+		this.insertText = isSnippet && tsEntry.insertText ? new vscode.SnippetString(tsEntry.insertText) : tsEntry.insertText;
 		this.filterText = this.getFilterText(completionContext.line, tsEntry.insertText);
 
 		if (completionContext.isMemberCompletion && completionContext.dotAccessorContext && !(this.insertText instanceof vscode.SnippetString)) {
@@ -116,15 +113,15 @@ class MyCompletionItem extends vscode.CompletionItem {
 			const kindModifiers = parseKindModifier(tsEntry.kindModifiers);
 			if (kindModifiers.has(PConst.KindModifiers.optional)) {
 				if (!this.insertText) {
-					this.insertText = this.label;
+					this.insertText = this.textLabel;
 				}
 
 				if (!this.filterText) {
-					this.filterText = this.label;
+					this.filterText = this.textLabel;
 				}
 				this.label += '?';
 			}
-			if (kindModifiers.has(PConst.KindModifiers.depreacted)) {
+			if (kindModifiers.has(PConst.KindModifiers.deprecated)) {
 				this.tags = [vscode.CompletionItemTag.Deprecated];
 			}
 
@@ -147,6 +144,10 @@ class MyCompletionItem extends vscode.CompletionItem {
 		}
 
 		this.resolveRange();
+	}
+
+	private get textLabel() {
+		return typeof this.label === 'string' ? this.label : this.label.label;
 	}
 
 	private _resolvedPromise?: {
@@ -186,11 +187,9 @@ class MyCompletionItem extends vscode.CompletionItem {
 			const args: Proto.CompletionDetailsRequestArgs = {
 				...typeConverters.Position.toFileLocationRequestArgs(filepath, this.position),
 				entryNames: [
-					// @ts-expect-error until TypeScript 4.3 protocol update
 					this.tsEntry.source || this.tsEntry.data ? {
 						name: this.tsEntry.name,
 						source: this.tsEntry.source,
-						// @ts-expect-error until TypeScript 4.3 protocol update
 						data: this.tsEntry.data,
 					} : this.tsEntry.name
 				]
@@ -221,7 +220,7 @@ class MyCompletionItem extends vscode.CompletionItem {
 			if (this.useCodeSnippet) {
 				const shouldCompleteFunction = await this.isValidFunctionCompletionContext(client, filepath, this.position, this.document, token);
 				if (shouldCompleteFunction) {
-					const { snippet, parameterCount } = snippetForFunctionCall(this, detail.displayParts);
+					const { snippet, parameterCount } = snippetForFunctionCall({ ...this, label: this.textLabel }, detail.displayParts);
 					this.insertText = snippet;
 					if (parameterCount > 0) {
 						//Fix for https://github.com/microsoft/vscode/issues/104059
@@ -413,8 +412,8 @@ class MyCompletionItem extends vscode.CompletionItem {
 	private getFuzzyWordRange() {
 		if (this.completionContext.useFuzzyWordRangeLogic) {
 			// Try getting longer, prefix based range for completions that span words
-			const text = this.completionContext.line.slice(Math.max(0, this.position.character - this.label.length), this.position.character).toLowerCase();
-			const entryName = this.label.toLowerCase();
+			const text = this.completionContext.line.slice(Math.max(0, this.position.character - this.textLabel.length), this.position.character).toLowerCase();
+			const entryName = this.textLabel.toLowerCase();
 			for (let i = entryName.length; i >= 0; --i) {
 				if (text.endsWith(entryName.substr(0, i)) && (!this.completionContext.wordRange || this.completionContext.wordRange.start.character > this.position.character - i)) {
 					return new vscode.Range(
@@ -555,6 +554,7 @@ class CompletionAcceptedCommand implements Command {
 			/* __GDPR__
 				"completions.accept" : {
 					"isPackageJsonImport" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+					"isImportStatementCompletion" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
 					"${include}": [
 						"${TypeScriptCommonProperties}"
 					]
@@ -562,6 +562,7 @@ class CompletionAcceptedCommand implements Command {
 			*/
 			this.telemetryReporter.logTelemetry('completions.accept', {
 				isPackageJsonImport: item.tsEntry.isPackageJsonImport ? 'true' : undefined,
+				isImportStatementCompletion: item.tsEntry.isImportStatementCompletion ? 'true' : undefined,
 			});
 		}
 	}
@@ -658,7 +659,7 @@ namespace CompletionConfiguration {
 			pathSuggestions: config.get<boolean>(CompletionConfiguration.pathSuggestions, true),
 			autoImportSuggestions: config.get<boolean>(CompletionConfiguration.autoImportSuggestions, true),
 			nameSuggestions: config.get<boolean>(CompletionConfiguration.nameSuggestions, true),
-			importStatementSuggestions: config.get<boolean>(CompletionConfiguration.nameSuggestions, true),
+			importStatementSuggestions: config.get<boolean>(CompletionConfiguration.importStatementSuggestions, true),
 		};
 	}
 }
@@ -752,7 +753,6 @@ class TypeScriptCompletionItemProvider implements vscode.CompletionItemProvider<
 					dotAccessorContext = { range, text };
 				}
 			}
-			// @ts-expect-error until 4.3 protocol update
 			isIncomplete = !!response.body.isIncomplete || (response as any).metadata && (response as any).metadata.isIncomplete;
 			entries = response.body.entries;
 			metadata = response.metadata;
@@ -779,21 +779,23 @@ class TypeScriptCompletionItemProvider implements vscode.CompletionItemProvider<
 		};
 
 		let includesPackageJsonImport = false;
+		let includesImportStatementCompletion = false;
 		const items: MyCompletionItem[] = [];
 		for (const entry of entries) {
 			if (!shouldExcludeCompletionEntry(entry, completionConfiguration)) {
-				const item = new MyCompletionItem(position, document, entry, completionContext, metadata);
+				const item = new MyCompletionItem(position, document, entry, completionContext, metadata, this.client);
 				item.command = {
 					command: ApplyCompletionCommand.ID,
 					title: '',
 					arguments: [item]
 				};
 				items.push(item);
-				includesPackageJsonImport = !!entry.isPackageJsonImport;
+				includesPackageJsonImport = includesPackageJsonImport || !!entry.isPackageJsonImport;
+				includesImportStatementCompletion = includesImportStatementCompletion || !!entry.isImportStatementCompletion;
 			}
 		}
 		if (duration !== undefined) {
-			this.logCompletionsTelemetry(duration, response, includesPackageJsonImport);
+			this.logCompletionsTelemetry(duration, response, includesPackageJsonImport, includesImportStatementCompletion);
 		}
 		return new vscode.CompletionList(items, isIncomplete);
 	}
@@ -801,7 +803,8 @@ class TypeScriptCompletionItemProvider implements vscode.CompletionItemProvider<
 	private logCompletionsTelemetry(
 		duration: number,
 		response: ServerResponse.Response<Proto.CompletionInfoResponse> | undefined,
-		includesPackageJsonImport?: boolean
+		includesPackageJsonImport?: boolean,
+		includesImportStatementCompletion?: boolean,
 	) {
 		/* __GDPR__
 			"completions.execute" : {
@@ -811,18 +814,24 @@ class TypeScriptCompletionItemProvider implements vscode.CompletionItemProvider<
 				"updateGraphDurationMs" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
 				"createAutoImportProviderProgramDurationMs" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
 				"includesPackageJsonImport" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+				"includesImportStatementCompletion" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
 				"${include}": [
 					"${TypeScriptCommonProperties}"
 				]
 			}
 		*/
 		this.telemetryReporter.logTelemetry('completions.execute', {
-			duration: duration,
+			duration: String(duration),
 			type: response?.type ?? 'unknown',
-			count: response?.type === 'response' && response.body ? response.body.entries.length : 0,
-			updateGraphDurationMs: response?.type === 'response' ? response.performanceData?.updateGraphDurationMs : undefined,
-			createAutoImportProviderProgramDurationMs: response?.type === 'response' ? response.performanceData?.createAutoImportProviderProgramDurationMs : undefined,
+			count: String(response?.type === 'response' && response.body ? response.body.entries.length : 0),
+			updateGraphDurationMs: response?.type === 'response' && typeof response.performanceData?.updateGraphDurationMs === 'number'
+				? String(response.performanceData.updateGraphDurationMs)
+				: undefined,
+			createAutoImportProviderProgramDurationMs: response?.type === 'response' && typeof response.performanceData?.createAutoImportProviderProgramDurationMs === 'number'
+				? String(response.performanceData.createAutoImportProviderProgramDurationMs)
+				: undefined,
 			includesPackageJsonImport: includesPackageJsonImport ? 'true' : undefined,
+			includesImportStatementCompletion: includesImportStatementCompletion ? 'true' : undefined,
 		});
 	}
 
@@ -835,8 +844,8 @@ class TypeScriptCompletionItemProvider implements vscode.CompletionItemProvider<
 				return this.client.apiVersion.lt(API.v381) ? undefined : '#';
 
 			case ' ':
-				// @ts-expect-error until 4.3.0 protocol update
-				return this.client.apiVersion.gte(API.v430) ? ' ' : undefined;
+				const space: Proto.CompletionsTriggerCharacter = ' ';
+				return this.client.apiVersion.gte(API.v430) ? space : undefined;
 
 			case '.':
 			case '"':

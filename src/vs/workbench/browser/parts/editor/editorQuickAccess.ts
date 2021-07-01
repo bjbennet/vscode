@@ -68,7 +68,7 @@ export abstract class BaseEditorQuickAccessProvider extends PickerQuickAccessPro
 		return super.provide(picker, token);
 	}
 
-	protected getPicks(filter: string): Array<IEditorQuickPickItem | IQuickPickSeparator> {
+	protected _getPicks(filter: string): Array<IEditorQuickPickItem | IQuickPickSeparator> {
 		const query = prepareQuery(filter);
 
 		// Filtering
@@ -156,7 +156,7 @@ export abstract class BaseEditorQuickAccessProvider extends PickerQuickAccessPro
 					return isDirty ? localize('entryAriaLabelDirty', "{0}, dirty", nameAndDescription) : nameAndDescription;
 				})(),
 				description: editor.getDescription(),
-				iconClasses: getIconClasses(this.modelService, this.modeService, resource),
+				iconClasses: getIconClasses(this.modelService, this.modeService, resource).concat(editor.getLabelExtraClasses()),
 				italic: !this.editorGroupService.getGroup(groupId)?.isPinned(editor),
 				buttons: (() => {
 					return [
@@ -172,7 +172,7 @@ export abstract class BaseEditorQuickAccessProvider extends PickerQuickAccessPro
 					if (group) {
 						await group.closeEditor(editor, { preserveFocus: true });
 
-						if (!group.isOpened(editor)) {
+						if (!group.contains(editor)) {
 							return TriggerAction.REMOVE_ITEM;
 						}
 					}

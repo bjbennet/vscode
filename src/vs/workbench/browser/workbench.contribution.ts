@@ -10,9 +10,10 @@ import { isMacintosh, isWindows, isLinux, isWeb, isNative } from 'vs/base/common
 import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuration';
 import { isStandalone } from 'vs/base/browser/browser';
 
+const registry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);
+
 // Configuration
 (function registerConfiguration(): void {
-	const registry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);
 
 	// Workbench
 	registry.registerConfiguration({
@@ -88,8 +89,8 @@ import { isStandalone } from 'vs/base/browser/browser';
 			},
 			'workbench.editor.untitled.hint': {
 				'type': 'string',
-				'enum': ['text', 'hidden', 'default'],
-				'default': 'default',
+				'enum': ['text', 'hidden'],
+				'default': 'text',
 				'markdownDescription': localize({ comment: ['This is the description for a setting. Values surrounded by single quotes are not to be translated.'], key: 'untitledHint' }, "Controls if the untitled hint should be inline text in the editor or a floating button or hidden.")
 			},
 			'workbench.editor.tabCloseButton': {

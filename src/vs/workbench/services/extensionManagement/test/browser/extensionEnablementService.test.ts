@@ -4,35 +4,38 @@
  *--------------------------------------------------------------------------------------------*/
 import * as assert from 'assert';
 import * as sinon from 'sinon';
-import { IExtensionManagementService, DidUninstallExtensionEvent, ILocalExtension, DidInstallExtensionEvent } from 'vs/platform/extensionManagement/common/extensionManagement';
-import { IWorkbenchExtensionEnablementService, EnablementState, IExtensionManagementServerService, IExtensionManagementServer } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
+import { IExtensionManagementService, DidUninstallExtensionEvent, ILocalExtension, DidInstallExtensionEvent, InstallExtensionEvent } from 'vs/platform/extensionManagement/common/extensionManagement';
+import { IWorkbenchExtensionEnablementService, EnablementState, IExtensionManagementServerService, IExtensionManagementServer, IWorkbenchExtensionManagementService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
 import { ExtensionEnablementService } from 'vs/workbench/services/extensionManagement/browser/extensionEnablementService';
 import { TestInstantiationService } from 'vs/platform/instantiation/test/common/instantiationServiceMock';
 import { Emitter } from 'vs/base/common/event';
-import { IWorkspaceContextService, WorkbenchState } from 'vs/platform/workspace/common/workspace';
+import { IWorkspace, IWorkspaceContextService, WorkbenchState } from 'vs/platform/workspace/common/workspace';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 import { IStorageService, InMemoryStorageService } from 'vs/platform/storage/common/storage';
-import { IExtensionContributions, ExtensionType, IExtension, IExtensionManifest, ExtensionWorkspaceTrustRequestType } from 'vs/platform/extensions/common/extensions';
+import { IExtensionContributions, ExtensionType, IExtension, IExtensionManifest, IExtensionIdentifier } from 'vs/platform/extensions/common/extensions';
 import { isUndefinedOrNull } from 'vs/base/common/types';
 import { areSameExtensions } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { URI } from 'vs/base/common/uri';
 import { Schemas } from 'vs/base/common/network';
 import { TestConfigurationService } from 'vs/platform/configuration/test/common/testConfigurationService';
-import { productService, TestLifecycleService } from 'vs/workbench/test/browser/workbenchTestServices';
+import { TestLifecycleService } from 'vs/workbench/test/browser/workbenchTestServices';
 import { GlobalExtensionEnablementService } from 'vs/platform/extensionManagement/common/extensionEnablementService';
 import { IUserDataSyncAccountService, UserDataSyncAccountService } from 'vs/platform/userDataSync/common/userDataSyncAccount';
 import { IUserDataAutoSyncEnablementService } from 'vs/platform/userDataSync/common/userDataSync';
-// import { IHostService } from 'vs/workbench/services/host/browser/host';
 import { ILifecycleService } from 'vs/workbench/services/lifecycle/common/lifecycle';
 import { INotificationService } from 'vs/platform/notification/common/notification';
 import { TestNotificationService } from 'vs/platform/notification/test/common/testNotificationService';
 import { IHostService } from 'vs/workbench/services/host/browser/host';
 import { mock } from 'vs/base/test/common/mock';
 import { IExtensionBisectService } from 'vs/workbench/services/extensionManagement/browser/extensionBisect';
-import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from 'vs/platform/workspace/common/workspaceTrust';
-import { TestWorkspaceTrustManagementService, TestWorkspaceTrustRequestService } from 'vs/workbench/services/workspaces/test/common/testWorkspaceTrustService';
-import { IExtensionWorkspaceTrustRequestService } from 'vs/workbench/services/extensions/common/extensionWorkspaceTrustRequest';
+import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, WorkspaceTrustRequestOptions } from 'vs/platform/workspace/common/workspaceTrust';
+import { TestWorkspaceTrustManagementService } from 'vs/workbench/services/workspaces/test/common/testWorkspaceTrustService';
+import { ExtensionManifestPropertiesService, IExtensionManifestPropertiesService } from 'vs/workbench/services/extensions/common/extensionManifestPropertiesService';
+import { TestContextService, TestProductService } from 'vs/workbench/test/common/workbenchTestServices';
+import { TestWorkspace } from 'vs/platform/workspace/test/common/testWorkspace';
+import { ExtensionManagementService } from 'vs/workbench/services/extensionManagement/common/extensionManagementService';
+import { NullLogService } from 'vs/platform/log/common/log';
 
 function createStorageService(instantiationService: TestInstantiationService): IStorageService {
 	let service = instantiationService.get(IStorageService);
@@ -41,6 +44,7 @@ function createStorageService(instantiationService: TestInstantiationService): I
 		if (!workspaceContextService) {
 			workspaceContextService = instantiationService.stub(IWorkspaceContextService, <IWorkspaceContextService>{
 				getWorkbenchState: () => WorkbenchState.FOLDER,
+				getWorkspace: () => TestWorkspace as IWorkspace
 			});
 		}
 		service = instantiationService.stub(IStorageService, new InMemoryStorageService());
@@ -51,27 +55,42 @@ function createStorageService(instantiationService: TestInstantiationService): I
 export class TestExtensionEnablementService extends ExtensionEnablementService {
 	constructor(instantiationService: TestInstantiationService) {
 		const storageService = createStorageService(instantiationService);
-		const extensionManagementService = instantiationService.get(IExtensionManagementService) || instantiationService.stub(IExtensionManagementService, { onDidInstallExtension: new Emitter<DidInstallExtensionEvent>().event, onDidUninstallExtension: new Emitter<DidUninstallExtensionEvent>().event } as IExtensionManagementService);
-		const extensionManagementServerService = instantiationService.get(IExtensionManagementServerService) || instantiationService.stub(IExtensionManagementServerService, <IExtensionManagementServerService>{ localExtensionManagementServer: { extensionManagementService } });
+		const extensionManagementServerService = instantiationService.get(IExtensionManagementServerService) ||
+			instantiationService.stub(IExtensionManagementServerService, anExtensionManagementServerService({
+				id: 'local',
+				label: 'local',
+				extensionManagementService: <IExtensionManagementService>{
+					onInstallExtension: new Emitter<InstallExtensionEvent>().event,
+					onDidInstallExtension: new Emitter<DidInstallExtensionEvent>().event,
+					onUninstallExtension: new Emitter<IExtensionIdentifier>().event,
+					onDidUninstallExtension: new Emitter<DidUninstallExtensionEvent>().event,
+				}
+			}, null, null));
+		const workbenchExtensionManagementService = instantiationService.get(IWorkbenchExtensionManagementService) || instantiationService.stub(IWorkbenchExtensionManagementService, instantiationService.createInstance(ExtensionManagementService));
+		const workspaceTrustManagementService = instantiationService.get(IWorkspaceTrustManagementService) || instantiationService.stub(IWorkspaceTrustManagementService, new TestWorkspaceTrustManagementService());
 		super(
 			storageService,
 			new GlobalExtensionEnablementService(storageService),
-			instantiationService.get(IWorkspaceContextService),
+			instantiationService.get(IWorkspaceContextService) || new TestContextService(),
 			instantiationService.get(IWorkbenchEnvironmentService) || instantiationService.stub(IWorkbenchEnvironmentService, { configuration: Object.create(null) } as IWorkbenchEnvironmentService),
-			extensionManagementService,
-			new class extends mock<IExtensionWorkspaceTrustRequestService>() { getExtensionWorkspaceTrustRequestType(manifest: IExtensionManifest): ExtensionWorkspaceTrustRequestType { return 'never'; } },
+			workbenchExtensionManagementService,
 			instantiationService.get(IConfigurationService),
 			extensionManagementServerService,
-			productService,
 			instantiationService.get(IUserDataAutoSyncEnablementService) || instantiationService.stub(IUserDataAutoSyncEnablementService, <Partial<IUserDataAutoSyncEnablementService>>{ isEnabled() { return false; } }),
 			instantiationService.get(IUserDataSyncAccountService) || instantiationService.stub(IUserDataSyncAccountService, UserDataSyncAccountService),
 			instantiationService.get(ILifecycleService) || instantiationService.stub(ILifecycleService, new TestLifecycleService()),
 			instantiationService.get(INotificationService) || instantiationService.stub(INotificationService, new TestNotificationService()),
 			instantiationService.get(IHostService),
 			new class extends mock<IExtensionBisectService>() { override isDisabledByBisect() { return false; } },
-			instantiationService.get(IWorkspaceTrustManagementService) || instantiationService.stub(IWorkspaceTrustManagementService, new TestWorkspaceTrustManagementService()),
-			instantiationService.get(IWorkspaceTrustRequestService) || instantiationService.stub(IWorkspaceTrustRequestService, new TestWorkspaceTrustRequestService())
+			workspaceTrustManagementService,
+			new class extends mock<IWorkspaceTrustRequestService>() { override requestWorkspaceTrust(options?: WorkspaceTrustRequestOptions): Promise<boolean> { return Promise.resolve(true); } },
+			instantiationService.get(IExtensionManifestPropertiesService) || instantiationService.stub(IExtensionManifestPropertiesService, new ExtensionManifestPropertiesService(TestProductService, new TestConfigurationService(), workspaceTrustManagementService, new NullLogService())),
+			instantiationService
 		);
+	}
+
+	public async waitUntilInitialized(): Promise<void> {
+		await this.extensionsManager.whenInitialized();
 	}
 
 	public reset(): void {
@@ -96,20 +115,22 @@ suite('ExtensionEnablementService Test', () => {
 
 	const didInstallEvent = new Emitter<DidInstallExtensionEvent>();
 	const didUninstallEvent = new Emitter<DidUninstallExtensionEvent>();
+	const installed: ILocalExtension[] = [];
 
 	setup(() => {
+		installed.splice(0, installed.length);
 		instantiationService = new TestInstantiationService();
 		instantiationService.stub(IConfigurationService, new TestConfigurationService());
-		instantiationService.stub(IExtensionManagementService, <Partial<IExtensionManagementService>>{
-			onDidInstallExtension: didInstallEvent.event,
-			onDidUninstallExtension: didUninstallEvent.event,
-			getInstalled: () => Promise.resolve([] as ILocalExtension[])
-		});
-		instantiationService.stub(IExtensionManagementServerService, <IExtensionManagementServerService>{
-			localExtensionManagementServer: {
-				extensionManagementService: instantiationService.get(IExtensionManagementService)
+		instantiationService.stub(IExtensionManagementServerService, anExtensionManagementServerService({
+			id: 'local',
+			label: 'local',
+			extensionManagementService: <IExtensionManagementService>{
+				onDidInstallExtension: didInstallEvent.event,
+				onDidUninstallExtension: didUninstallEvent.event,
+				getInstalled: () => Promise.resolve(installed)
 			}
-		});
+		}, null, null));
+		instantiationService.stub(IWorkbenchExtensionManagementService, instantiationService.createInstance(ExtensionManagementService));
 		testObject = new TestExtensionEnablementService(instantiationService);
 	});
 
@@ -129,14 +150,12 @@ suite('ExtensionEnablementService Test', () => {
 			.then(value => assert.ok(value));
 	});
 
-	test('test disable an extension globally triggers the change event', () => {
+	test('test disable an extension globally triggers the change event', async () => {
 		const target = sinon.spy();
 		testObject.onEnablementChanged(target);
-		return testObject.setEnablement([aLocalExtension('pub.a')], EnablementState.DisabledGlobally)
-			.then(() => {
-				assert.ok(target.calledOnce);
-				assert.deepStrictEqual((<IExtension>target.args[0][0][0]).identifier, { id: 'pub.a' });
-			});
+		await testObject.setEnablement([aLocalExtension('pub.a')], EnablementState.DisabledGlobally);
+		assert.ok(target.calledOnce);
+		assert.deepStrictEqual((<IExtension>target.args[0][0][0]).identifier, { id: 'pub.a' });
 	});
 
 	test('test disable an extension globally again should return a falsy promise', () => {
@@ -368,9 +387,13 @@ suite('ExtensionEnablementService Test', () => {
 
 	test('test remove an extension from disablement list when uninstalled', async () => {
 		const extension = aLocalExtension('pub.a');
+		installed.push(extension);
+		testObject = new TestExtensionEnablementService(instantiationService);
+
 		await testObject.setEnablement([extension], EnablementState.DisabledWorkspace);
 		await testObject.setEnablement([extension], EnablementState.DisabledGlobally);
 		didUninstallEvent.fire({ identifier: { id: 'pub.a' } });
+
 		assert.ok(testObject.isEnabled(extension));
 		assert.strictEqual(testObject.getEnablementState(extension), EnablementState.EnabledGlobally);
 	});
@@ -465,15 +488,70 @@ suite('ExtensionEnablementService Test', () => {
 
 	test('test extension is disabled when disabled in environment', async () => {
 		const extension = aLocalExtension('pub.a');
+		installed.push(extension);
+
 		instantiationService.stub(IWorkbenchEnvironmentService, { disableExtensions: ['pub.a'] } as IWorkbenchEnvironmentService);
-		instantiationService.stub(IExtensionManagementService, <Partial<IExtensionManagementService>>{
-			onDidInstallExtension: didInstallEvent.event,
-			onDidUninstallExtension: didUninstallEvent.event,
-			getInstalled: () => Promise.resolve([extension, aLocalExtension('pub.b')])
-		});
 		testObject = new TestExtensionEnablementService(instantiationService);
+
 		assert.ok(!testObject.isEnabled(extension));
 		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.DisabledByEnvironment);
+	});
+
+	test('test extension does not support vitrual workspace is not enabled in virtual workspace', async () => {
+		const extension = aLocalExtension2('pub.a', { capabilities: { virtualWorkspaces: false } });
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA').with(({ scheme: 'virtual' })) }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		assert.ok(!testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.DisabledByVirtualWorkspace);
+	});
+
+	test('test web extension from web extension management server and does not support vitrual workspace is enabled in virtual workspace', async () => {
+		instantiationService.stub(IExtensionManagementServerService, anExtensionManagementServerService(null, anExtensionManagementServer('vscode-remote', instantiationService), anExtensionManagementServer('web', instantiationService)));
+		const extension = aLocalExtension2('pub.a', { capabilities: { virtualWorkspaces: false }, browser: 'browser.js' }, { location: URI.file(`pub.a`).with({ scheme: 'web' }) });
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA').with(({ scheme: 'virtual' })) }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		assert.ok(testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.EnabledGlobally);
+	});
+
+	test('test web extension from remote extension management server and does not support vitrual workspace is disabled in virtual workspace', async () => {
+		instantiationService.stub(IExtensionManagementServerService, anExtensionManagementServerService(null, anExtensionManagementServer('vscode-remote', instantiationService), anExtensionManagementServer('web', instantiationService)));
+		const extension = aLocalExtension2('pub.a', { capabilities: { virtualWorkspaces: false }, browser: 'browser.js' }, { location: URI.file(`pub.a`).with({ scheme: 'vscode-remote' }) });
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA').with(({ scheme: 'virtual' })) }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		assert.ok(!testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.DisabledByVirtualWorkspace);
+	});
+
+	test('test canChangeEnablement return false when extension is disabled in virtual workspace', () => {
+		const extension = aLocalExtension2('pub.a', { capabilities: { virtualWorkspaces: false } });
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA').with(({ scheme: 'virtual' })) }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		assert.ok(!testObject.canChangeEnablement(extension));
+	});
+
+	test('test extension does not support vitrual workspace is enabled in virtual workspace', async () => {
+		const extension = aLocalExtension2('pub.a', { capabilities: { virtualWorkspaces: false } });
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA') }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		assert.ok(testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.EnabledGlobally);
+	});
+
+	test('test extension supports virtual workspace is enabled in virtual workspace', async () => {
+		const extension = aLocalExtension2('pub.a', { capabilities: { virtualWorkspaces: true } });
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA').with(({ scheme: 'virtual' })) }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		assert.ok(testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.EnabledGlobally);
+	});
+
+	test('test extension without any value for virtual worksapce is enabled in virtual workspace', async () => {
+		const extension = aLocalExtension2('pub.a');
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA').with(({ scheme: 'virtual' })) }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		assert.ok(testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.EnabledGlobally);
 	});
 
 	test('test local workspace extension is disabled by kind', async () => {
@@ -604,6 +682,55 @@ suite('ExtensionEnablementService Test', () => {
 		assert.deepStrictEqual(testObject.getEnablementState(webExtension), EnablementState.EnabledGlobally);
 	});
 
+	test('test state of multipe extensions', async () => {
+		installed.push(...[aLocalExtension('pub.a'), aLocalExtension('pub.b'), aLocalExtension('pub.c'), aLocalExtension('pub.d'), aLocalExtension('pub.e')]);
+		testObject = new TestExtensionEnablementService(instantiationService);
+		await (<TestExtensionEnablementService>testObject).waitUntilInitialized();
+
+		await testObject.setEnablement([installed[0]], EnablementState.DisabledGlobally);
+		await testObject.setEnablement([installed[1]], EnablementState.DisabledWorkspace);
+		await testObject.setEnablement([installed[2]], EnablementState.EnabledWorkspace);
+		await testObject.setEnablement([installed[3]], EnablementState.EnabledGlobally);
+
+		assert.deepStrictEqual(testObject.getEnablementStates(installed), [EnablementState.DisabledGlobally, EnablementState.DisabledWorkspace, EnablementState.EnabledWorkspace, EnablementState.EnabledGlobally, EnablementState.EnabledGlobally]);
+	});
+
+	test('test extension is disabled by dependency if it has a dependency that is disabled', async () => {
+		installed.push(...[aLocalExtension2('pub.a'), aLocalExtension2('pub.b', { extensionDependencies: ['pub.a'] })]);
+		testObject = new TestExtensionEnablementService(instantiationService);
+		await (<TestExtensionEnablementService>testObject).waitUntilInitialized();
+
+		await testObject.setEnablement([installed[0]], EnablementState.DisabledGlobally);
+
+		assert.strictEqual(testObject.getEnablementState(installed[1]), EnablementState.DisabledByExtensionDependency);
+	});
+
+	test('test extension is disabled by dependency if it has a dependency that is disabled by virtual workspace', async () => {
+		installed.push(...[aLocalExtension2('pub.a', { capabilities: { virtualWorkspaces: false } }), aLocalExtension2('pub.b', { extensionDependencies: ['pub.a'], capabilities: { virtualWorkspaces: true } })]);
+		instantiationService.stub(IWorkspaceContextService, 'getWorkspace', <IWorkspace>{ folders: [{ uri: URI.file('worskapceA').with(({ scheme: 'virtual' })) }] });
+		testObject = new TestExtensionEnablementService(instantiationService);
+		await (<TestExtensionEnablementService>testObject).waitUntilInitialized();
+
+		assert.strictEqual(testObject.getEnablementState(installed[0]), EnablementState.DisabledByVirtualWorkspace);
+		assert.strictEqual(testObject.getEnablementState(installed[1]), EnablementState.DisabledByExtensionDependency);
+	});
+
+	test('test extension is not disabled by dependency even if it has a dependency that is disabled when installed extensions are not set', async () => {
+		await testObject.setEnablement([aLocalExtension2('pub.a')], EnablementState.DisabledGlobally);
+
+		assert.strictEqual(testObject.getEnablementState(aLocalExtension2('pub.b', { extensionDependencies: ['pub.a'] })), EnablementState.EnabledGlobally);
+	});
+
+	test('test extension is disabled by dependency if it has a dependency that is disabled when all extensions are passed', async () => {
+		installed.push(...[aLocalExtension2('pub.a'), aLocalExtension2('pub.b', { extensionDependencies: ['pub.a'] })]);
+		testObject = new TestExtensionEnablementService(instantiationService);
+		await (<TestExtensionEnablementService>testObject).waitUntilInitialized();
+
+		await testObject.setEnablement([installed[0]], EnablementState.DisabledGlobally);
+
+		assert.deepStrictEqual(testObject.getEnablementStates(installed), [EnablementState.DisabledGlobally, EnablementState.DisabledByExtensionDependency]);
+	});
+
 });
 
 function anExtensionManagementServer(authority: string, instantiationService: TestInstantiationService): IExtensionManagementServer {
@@ -642,11 +769,12 @@ function aLocalExtension(id: string, contributes?: IExtensionContributions, type
 	return aLocalExtension2(id, contributes ? { contributes } : {}, isUndefinedOrNull(type) ? {} : { type });
 }
 
-function aLocalExtension2(id: string, manifest: any = {}, properties: any = {}): ILocalExtension {
+function aLocalExtension2(id: string, manifest: Partial<IExtensionManifest> = {}, properties: any = {}): ILocalExtension {
 	const [publisher, name] = id.split('.');
 	manifest = { name, publisher, ...manifest };
 	properties = {
 		identifier: { id },
+		location: URI.file(`pub.${name}`),
 		galleryIdentifier: { id, uuid: undefined },
 		type: ExtensionType.User,
 		...properties

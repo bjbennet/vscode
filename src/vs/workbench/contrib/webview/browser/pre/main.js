@@ -4,10 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 // @ts-check
 
+/// <reference lib="dom" />
+
 /**
  * @typedef {{
  *   postMessage: (channel: string, data?: any) => void,
- *   onMessage: (channel: string, handler: any) => void,
+ *   onMessage: (channel: string, handler: (event: MessageEvent, data: any) => void) => void,
  *   focusIframeOnCreate?: boolean,
  *   ready?: Promise<void>,
  *   onIframeLoaded?: (iframe: HTMLIFrameElement) => void,
@@ -21,8 +23,14 @@ const isSafari = navigator.vendor && navigator.vendor.indexOf('Apple') > -1 &&
 	navigator.userAgent.indexOf('CriOS') === -1 &&
 	navigator.userAgent.indexOf('FxiOS') === -1;
 
+const isFirefox = (
+	navigator.userAgent &&
+	navigator.userAgent.indexOf('Firefox') >= 0
+);
+
 const searchParams = new URL(location.toString()).searchParams;
 const ID = searchParams.get('id');
+const expectedWorkerVersion = parseInt(searchParams.get('swVersion'));
 
 /**
  * Use polling to track focus of main webview and iframes within the webview
@@ -55,6 +63,18 @@ const getActiveFrame = () => {
 const getPendingFrame = () => {
 	return /** @type {HTMLIFrameElement} */ (document.getElementById('pending-frame'));
 };
+
+/**
+ * @template T
+ * @param {T | undefined | null} obj
+ * @return {T}
+ */
+function assertIsDefined(obj) {
+	if (typeof obj === 'undefined' || obj === null) {
+		throw new Error('Found unexpected null');
+	}
+	return obj;
+}
 
 const vscodePostMessageFuncName = '__vscode_post_message__';
 
@@ -190,12 +210,57 @@ function getVsCodeApiScript(allowMultipleAPIAcquire, useParentPostMessage, state
 		`;
 }
 
+/** @type {Promise<void>} */
+const workerReady = new Promise(async (resolve, reject) => {
+	if (!areServiceWorkersEnabled()) {
+		return reject(new Error('Service Workers are not enabled in browser. Webviews will not work.'));
+	}
+
+	const swPath = `service-worker.js${self.location.search}`;
+
+	navigator.serviceWorker.register(swPath).then(
+		async registration => {
+			await navigator.serviceWorker.ready;
+
+			/**
+			 * @param {MessageEvent} event
+			 */
+			const versionHandler = async (event) => {
+				if (event.data.channel !== 'version') {
+					return;
+				}
+
+				navigator.serviceWorker.removeEventListener('message', versionHandler);
+				if (event.data.version === expectedWorkerVersion) {
+					return resolve();
+				} else {
+					console.log(`Found unexpected service worker version. Found: ${event.data.version}. Expected: ${expectedWorkerVersion}`);
+					console.log(`Attempting to reload service worker`);
+
+					// If we have the wrong version, try once (and only once) to unregister and re-register
+					// Note that `.update` doesn't seem to work desktop electron at the moment so we use
+					// `unregister` and `register` here.
+					return registration.unregister()
+						.then(() => navigator.serviceWorker.register(swPath))
+						.then(() => navigator.serviceWorker.ready)
+						.finally(() => { resolve(); });
+				}
+			};
+			navigator.serviceWorker.addEventListener('message', versionHandler);
+			assertIsDefined(registration.active).postMessage({ channel: 'version' });
+		},
+		error => {
+			reject(new Error(`Could not register service workers: ${error}.`));
+		});
+});
+
 /**
  * @param {WebviewHost} host
  */
-export function createWebviewManager(host) {
+export async function createWebviewManager(host) {
 	// state
 	let firstLoad = true;
+	/** @type {any} */
 	let loadTimeout;
 	let styleVersion = 0;
 
@@ -206,7 +271,7 @@ export function createWebviewManager(host) {
 		/** @type {number | undefined} */
 		initialScrollProgress: undefined,
 
-		/** @type {{ [key: string]: string }} */
+		/** @type {{ [key: string]: string } | undefined} */
 		styles: undefined,
 
 		/** @type {string | undefined} */
@@ -216,69 +281,26 @@ export function createWebviewManager(host) {
 		themeName: undefined,
 	};
 
-	function fatalError(/** @type {string} */ message) {
-		console.error(`Webview fatal error: ${message}`);
-		host.postMessage('fatal-error', { message });
-	}
-
-	/** @type {Promise<void>} */
-	const workerReady = new Promise(async (resolveWorkerReady) => {
-		if (!areServiceWorkersEnabled()) {
-			fatalError('Service Workers are not enabled in browser. Webviews will not work.');
-			return resolveWorkerReady();
-		}
-
-		const expectedWorkerVersion = 1;
-
-		navigator.serviceWorker.register(`service-worker.js${self.location.search}`).then(
-			async registration => {
-				await navigator.serviceWorker.ready;
-
-				const versionHandler = (event) => {
-					if (event.data.channel !== 'version') {
-						return;
-					}
-
-					navigator.serviceWorker.removeEventListener('message', versionHandler);
-					if (event.data.version === expectedWorkerVersion) {
-						return resolveWorkerReady();
-					} else {
-						// If we have the wrong version, try once to unregister and re-register
-						return registration.update()
-							.then(() => navigator.serviceWorker.ready)
-							.finally(resolveWorkerReady);
-					}
-				};
-				navigator.serviceWorker.addEventListener('message', versionHandler);
-				registration.active.postMessage({ channel: 'version' });
-			},
-			error => {
-				fatalError(`Could not register service workers: ${error}.`);
-				resolveWorkerReady();
-			});
-
-		host.onMessage('did-load-resource', (_event, data) => {
-			navigator.serviceWorker.ready.then(registration => {
-				registration.active.postMessage({ channel: 'did-load-resource', data }, data.data?.buffer ? [data.data.buffer] : []);
-			});
-		});
-
-		host.onMessage('did-load-localhost', (_event, data) => {
-			navigator.serviceWorker.ready.then(registration => {
-				registration.active.postMessage({ channel: 'did-load-localhost', data });
-			});
-		});
-
-		navigator.serviceWorker.addEventListener('message', event => {
-			switch (event.data.channel) {
-				case 'load-resource':
-				case 'load-localhost':
-					host.postMessage(event.data.channel, event.data);
-					return;
-			}
+	host.onMessage('did-load-resource', (_event, data) => {
+		navigator.serviceWorker.ready.then(registration => {
+			assertIsDefined(registration.active).postMessage({ channel: 'did-load-resource', data }, data.data?.buffer ? [data.data.buffer] : []);
 		});
 	});
 
+	host.onMessage('did-load-localhost', (_event, data) => {
+		navigator.serviceWorker.ready.then(registration => {
+			assertIsDefined(registration.active).postMessage({ channel: 'did-load-localhost', data });
+		});
+	});
+
+	navigator.serviceWorker.addEventListener('message', event => {
+		switch (event.data.channel) {
+			case 'load-resource':
+			case 'load-localhost':
+				host.postMessage(event.data.channel, event.data);
+				return;
+		}
+	});
 	/**
 	 * @param {HTMLDocument?} document
 	 * @param {HTMLElement?} body
@@ -290,7 +312,9 @@ export function createWebviewManager(host) {
 
 		if (body) {
 			body.classList.remove('vscode-light', 'vscode-dark', 'vscode-high-contrast');
-			body.classList.add(initData.activeTheme);
+			if (initData.activeTheme) {
+				body.classList.add(initData.activeTheme);
+			}
 
 			body.dataset.vscodeThemeKind = initData.activeTheme;
 			body.dataset.vscodeThemeName = initData.themeName || '';
@@ -332,8 +356,8 @@ export function createWebviewManager(host) {
 			if (node.tagName && node.tagName.toLowerCase() === 'a' && node.href) {
 				if (node.getAttribute('href') === '#') {
 					event.view.scrollTo(0, 0);
-				} else if (node.hash && (node.getAttribute('href') === node.hash || (baseElement && node.href.indexOf(baseElement.href) >= 0))) {
-					let scrollTarget = event.view.document.getElementById(node.hash.substr(1, node.hash.length - 1));
+				} else if (node.hash && (node.getAttribute('href') === node.hash || (baseElement && node.href === baseElement.href + node.hash))) {
+					const scrollTarget = event.view.document.getElementById(node.hash.substr(1, node.hash.length - 1));
 					if (scrollTarget) {
 						scrollTarget.scrollIntoView();
 					}
@@ -376,7 +400,7 @@ export function createWebviewManager(host) {
 		// make sure we block the browser from dispatching it. Instead VS Code
 		// handles these events and will dispatch a copy/paste back to the webview
 		// if needed
-		if (isUndoRedo(e)) {
+		if (isUndoRedo(e) || isPrint(e)) {
 			e.preventDefault();
 		} else if (isCopyPasteOrCut(e)) {
 			if (host.onElectron) {
@@ -432,8 +456,20 @@ export function createWebviewManager(host) {
 		return hasMeta && ['z', 'y'].includes(e.key.toLowerCase());
 	}
 
+	/**
+	 * @param {KeyboardEvent} e
+	 * @return {boolean}
+	 */
+	function isPrint(e) {
+		const hasMeta = e.ctrlKey || e.metaKey;
+		return hasMeta && e.key.toLowerCase() === 'p';
+	}
+
 	let isHandlingScroll = false;
 
+	/**
+	 * @param {WheelEvent} event
+	 */
 	const handleWheel = (event) => {
 		if (isHandlingScroll) {
 			return;
@@ -449,15 +485,21 @@ export function createWebviewManager(host) {
 		});
 	};
 
+	/**
+	 * @param {Event} event
+	 */
 	const handleInnerScroll = (event) => {
-		if (!event.target || !event.target.body) {
-			return;
-		}
 		if (isHandlingScroll) {
 			return;
 		}
 
-		const progress = event.currentTarget.scrollY / event.target.body.clientHeight;
+		const target = /** @type {HTMLDocument | null} */ (event.target);
+		const currentTarget = /** @type {Window | null} */ (event.currentTarget);
+		if (!target || !currentTarget || !target.body) {
+			return;
+		}
+
+		const progress = currentTarget.scrollY / target.body.clientHeight;
 		if (isNaN(progress)) {
 			return;
 		}
@@ -474,6 +516,19 @@ export function createWebviewManager(host) {
 	};
 
 	/**
+	 * @typedef {{
+	 *     contents: string;
+	 *     options: {
+	 *         readonly allowScripts: boolean;
+	 *         readonly allowMultipleAPIAcquire: boolean;
+	 *     }
+	 *     state: any;
+	 *     cspSource: string;
+	 * }} ContentUpdateData
+	 */
+
+	/**
+	 * @param {ContentUpdateData} data
 	 * @return {string}
 	 */
 	function toContentHtml(data) {
@@ -483,7 +538,10 @@ export function createWebviewManager(host) {
 
 		newDocument.querySelectorAll('a').forEach(a => {
 			if (!a.title) {
-				a.title = a.getAttribute('href');
+				const href = a.getAttribute('href');
+				if (typeof href === 'string') {
+					a.title = href;
+				}
 			}
 		});
 
@@ -507,9 +565,11 @@ export function createWebviewManager(host) {
 		} else {
 			try {
 				// Attempt to rewrite CSPs that hardcode old-style resource endpoint
-				const endpointUrl = new URL(data.resourceEndpoint);
-				const newCsp = csp.getAttribute('content').replace(/(vscode-webview-resource|vscode-resource):(?=(\s|;|$))/g, endpointUrl.origin);
-				csp.setAttribute('content', newCsp);
+				const cspContent = csp.getAttribute('content');
+				if (cspContent) {
+					const newCsp = cspContent.replace(/(vscode-webview-resource|vscode-resource):(?=(\s|;|$))/g, data.cspSource);
+					csp.setAttribute('content', newCsp);
+				}
 			} catch (e) {
 				console.error(`Could not rewrite csp: ${e}`);
 			}
@@ -562,9 +622,17 @@ export function createWebviewManager(host) {
 
 		// update iframe-contents
 		let updateId = 0;
-		host.onMessage('content', async (_event, data) => {
+		host.onMessage('content', async (_event, /** @type {ContentUpdateData} */ data) => {
 			const currentUpdateId = ++updateId;
-			await workerReady;
+
+			try {
+				await workerReady;
+			} catch (e) {
+				console.error(`Webview fatal error: ${e}`);
+				host.postMessage('fatal-error', { message: e + '' });
+				return;
+			}
+
 			if (currentUpdateId !== updateId) {
 				return;
 			}
@@ -577,18 +645,19 @@ export function createWebviewManager(host) {
 			const frame = getActiveFrame();
 			const wasFirstLoad = firstLoad;
 			// keep current scrollY around and use later
+			/** @type {(body: HTMLElement, window: Window) => void} */
 			let setInitialScrollPosition;
 			if (firstLoad) {
 				firstLoad = false;
 				setInitialScrollPosition = (body, window) => {
-					if (!isNaN(initData.initialScrollProgress)) {
+					if (typeof initData.initialScrollProgress === 'number' && !isNaN(initData.initialScrollProgress)) {
 						if (window.scrollY === 0) {
 							window.scroll(0, body.clientHeight * initData.initialScrollProgress);
 						}
 					}
 				};
 			} else {
-				const scrollY = frame && frame.contentDocument && frame.contentDocument.body ? frame.contentWindow.scrollY : 0;
+				const scrollY = frame && frame.contentDocument && frame.contentDocument.body ? assertIsDefined(frame.contentWindow).scrollY : 0;
 				setInitialScrollPosition = (body, window) => {
 					if (window.scrollY === 0) {
 						window.scroll(0, scrollY);
@@ -610,7 +679,9 @@ export function createWebviewManager(host) {
 			newFrame.setAttribute('id', 'pending-frame');
 			newFrame.setAttribute('frameborder', '0');
 			newFrame.setAttribute('sandbox', options.allowScripts ? 'allow-scripts allow-forms allow-same-origin allow-pointer-lock allow-downloads' : 'allow-same-origin allow-pointer-lock');
-			newFrame.setAttribute('allow', options.allowScripts ? 'clipboard-read; clipboard-write;' : '');
+			if (!isFirefox) {
+				newFrame.setAttribute('allow', options.allowScripts ? 'clipboard-read; clipboard-write;' : '');
+			}
 			// We should just be able to use srcdoc, but I wasn't
 			// seeing the service worker applying properly.
 			// Fake load an empty on the correct origin and then write real html
@@ -647,15 +718,16 @@ export function createWebviewManager(host) {
 						return;
 					}
 
-					if (newFrame.contentDocument.readyState !== 'loading') {
+					const contentDocument = assertIsDefined(newFrame.contentDocument);
+					if (contentDocument.readyState !== 'loading') {
 						clearInterval(interval);
-						onFrameLoaded(newFrame.contentDocument);
+						onFrameLoaded(contentDocument);
 					}
 				}, 10);
 			} else {
-				newFrame.contentWindow.addEventListener('DOMContentLoaded', e => {
+				assertIsDefined(newFrame.contentWindow).addEventListener('DOMContentLoaded', e => {
 					const contentDocument = e.target ? (/** @type {HTMLDocument} */ (e.target)) : undefined;
-					onFrameLoaded(contentDocument);
+					onFrameLoaded(assertIsDefined(contentDocument));
 				});
 			}
 
@@ -683,7 +755,7 @@ export function createWebviewManager(host) {
 					newFrame.setAttribute('id', 'active-frame');
 					newFrame.style.visibility = 'visible';
 					if (host.focusIframeOnCreate) {
-						newFrame.contentWindow.focus();
+						assertIsDefined(newFrame.contentWindow).focus();
 					}
 
 					contentWindow.addEventListener('scroll', handleInnerScroll);
@@ -711,10 +783,12 @@ export function createWebviewManager(host) {
 				loadTimeout = setTimeout(() => {
 					clearTimeout(loadTimeout);
 					loadTimeout = undefined;
-					onLoad(newFrame.contentDocument, newFrame.contentWindow);
+					onLoad(assertIsDefined(newFrame.contentDocument), assertIsDefined(newFrame.contentWindow));
 				}, 200);
 
-				newFrame.contentWindow.addEventListener('load', function (e) {
+				const contentWindow = assertIsDefined(newFrame.contentWindow);
+
+				contentWindow.addEventListener('load', function (e) {
 					const contentDocument = /** @type {Document} */ (e.target);
 
 					if (loadTimeout) {
@@ -725,11 +799,22 @@ export function createWebviewManager(host) {
 				});
 
 				// Bubble out various events
-				newFrame.contentWindow.addEventListener('click', handleInnerClick);
-				newFrame.contentWindow.addEventListener('auxclick', handleAuxClick);
-				newFrame.contentWindow.addEventListener('keydown', handleInnerKeydown);
-				newFrame.contentWindow.addEventListener('keyup', handleInnerUp);
-				newFrame.contentWindow.addEventListener('contextmenu', e => e.preventDefault());
+				contentWindow.addEventListener('click', handleInnerClick);
+				contentWindow.addEventListener('auxclick', handleAuxClick);
+				contentWindow.addEventListener('keydown', handleInnerKeydown);
+				contentWindow.addEventListener('keyup', handleInnerUp);
+				contentWindow.addEventListener('contextmenu', e => {
+					if (e.defaultPrevented) {
+						// Extension code has already handled this event
+						return;
+					}
+
+					e.preventDefault();
+					host.postMessage('did-context-menu', {
+						clientX: e.clientX,
+						clientY: e.clientY,
+					});
+				});
 
 				if (host.onIframeLoaded) {
 					host.onIframeLoaded(newFrame);
@@ -745,7 +830,7 @@ export function createWebviewManager(host) {
 			if (!pending) {
 				const target = getActiveFrame();
 				if (target) {
-					target.contentWindow.postMessage(data.message, '*', data.transfer);
+					assertIsDefined(target.contentWindow).postMessage(data.message, '*', data.transfer);
 					return;
 				}
 			}
@@ -761,7 +846,7 @@ export function createWebviewManager(host) {
 			if (!target) {
 				return;
 			}
-			target.contentDocument.execCommand(data);
+			assertIsDefined(target.contentDocument).execCommand(data);
 		});
 
 		trackFocus({
@@ -769,7 +854,7 @@ export function createWebviewManager(host) {
 			onBlur: () => host.postMessage('did-blur')
 		});
 
-		(/** @type {any} */ (window))[vscodePostMessageFuncName] = (command, data, transfer) => {
+		(/** @type {any} */ (window))[vscodePostMessageFuncName] = (/** @type {string} */ command, /** @type {any} */ data) => {
 			switch (command) {
 				case 'onmessage':
 				case 'do-update-state':

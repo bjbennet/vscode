@@ -170,7 +170,7 @@ suite('SearchModel', () => {
 		await testObject.search({ contentPattern: { pattern: 'somestring' }, type: 1, folderQueries });
 
 		assert.ok(target.calledThrice);
-		const data = target.args[0];
+		const data = target.args[2];
 		data[1].duration = -1;
 		assert.deepStrictEqual(['searchResultsFirstRender', { duration: -1 }], data);
 	});
@@ -202,7 +202,7 @@ suite('SearchModel', () => {
 
 		instantiationService.stub(ISearchService, searchServiceWithResults(
 			[aRawMatch('file://c:/1', new TextSearchMatch('some preview', lineOneRange))],
-			{ results: [], stats: testSearchStats }));
+			{ results: [], stats: testSearchStats, messages: [] }));
 
 		const testObject = instantiationService.createInstance(SearchModel);
 		const result = testObject.search({ contentPattern: { pattern: 'somestring' }, type: 1, folderQueries });
@@ -327,7 +327,7 @@ suite('SearchModel', () => {
 	}
 
 	function stub(arg1: any, arg2: any, arg3: any): sinon.SinonStub {
-		const stub = sinon.stub(arg1, arg2, arg3);
+		const stub = sinon.stub(arg1, arg2).callsFake(arg3);
 		restoreStubs.push(stub);
 		return stub;
 	}

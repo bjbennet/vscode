@@ -300,3 +300,14 @@
 .monaco-workbench.vs .search-panel .search-view .monaco-inputbox {
 	border: 1px solid transparent;
 }
+
+/* shared with search editor's message element */
+.text-search-provider-messages .providerMessage {
+	padding-top: 4px;
+}
+
+.text-search-provider-messages .providerMessage .codicon {
+	position: relative;
+	top: 3px;
+	padding-right: 3px;
+}

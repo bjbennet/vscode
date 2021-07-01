@@ -14,7 +14,7 @@ import { IPager, mapPager, singlePagePager } from 'vs/base/common/paging';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import {
 	IExtensionGalleryService, ILocalExtension, IGalleryExtension, IQueryOptions,
-	InstallExtensionEvent, DidInstallExtensionEvent, DidUninstallExtensionEvent, IExtensionIdentifier, InstallOperation, DefaultIconPath, InstallOptions
+	InstallExtensionEvent, DidInstallExtensionEvent, DidUninstallExtensionEvent, IExtensionIdentifier, InstallOperation, DefaultIconPath, InstallOptions, WEB_EXTENSION_TAG
 } from 'vs/platform/extensionManagement/common/extensionManagement';
 import { IWorkbenchExtensionEnablementService, EnablementState, IExtensionManagementServerService, IExtensionManagementServer, IWorkbenchExtensionManagementService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
 import { getGalleryExtensionTelemetryData, getLocalExtensionTelemetryData, areSameExtensions, getMaliciousExtensionsSet, groupByExtension, ExtensionIdentifierWithVersion, getGalleryExtensionId } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
@@ -36,12 +36,12 @@ import { IFileService } from 'vs/platform/files/common/files';
 import { IExtensionManifest, ExtensionType, IExtension as IPlatformExtension } from 'vs/platform/extensions/common/extensions';
 import { IModeService } from 'vs/editor/common/services/modeService';
 import { IProductService } from 'vs/platform/product/common/productService';
-import { ExtensionKindController } from 'vs/workbench/services/extensions/common/extensionsUtil';
 import { FileAccess } from 'vs/base/common/network';
 import { IIgnoredExtensionsManagementService } from 'vs/platform/userDataSync/common/ignoredExtensions';
 import { IUserDataAutoSyncService } from 'vs/platform/userDataSync/common/userDataSync';
 import { IContextKey, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { isBoolean } from 'vs/base/common/types';
+import { IExtensionManifestPropertiesService } from 'vs/workbench/services/extensions/common/extensionManifestPropertiesService';
 
 interface IExtensionStateProvider<T> {
 	(extension: Extension): T;
@@ -518,8 +518,6 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
 	private installing: IExtension[] = [];
 
-	private readonly extensionKindController: ExtensionKindController;
-
 	constructor(
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IEditorService private readonly editorService: IEditorService,
@@ -538,7 +536,9 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 		@IIgnoredExtensionsManagementService private readonly extensionsSyncManagementService: IIgnoredExtensionsManagementService,
 		@IUserDataAutoSyncService private readonly userDataAutoSyncService: IUserDataAutoSyncService,
 		@IProductService private readonly productService: IProductService,
-		@IContextKeyService contextKeyService: IContextKeyService
+		@IContextKeyService contextKeyService: IContextKeyService,
+		@IExtensionManifestPropertiesService private readonly extensionManifestPropertiesService: IExtensionManifestPropertiesService,
+		@ILogService private readonly logService: ILogService,
 	) {
 		super();
 		this.hasOutdatedExtensionsContextKey = HasOutdatedExtensionsContext.bindTo(contextKeyService);
@@ -588,8 +588,6 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 			this.updateContexts();
 			this.updateActivity();
 		}));
-
-		this.extensionKindController = new ExtensionKindController(productService, configurationService);
 	}
 
 	get local(): IExtension[] {
@@ -639,13 +637,28 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 		}
 
 		if (this.localExtensions) {
-			await this.localExtensions.queryInstalled();
+			try {
+				await this.localExtensions.queryInstalled();
+			}
+			catch (error) {
+				this.logService.error(error);
+			}
 		}
 		if (this.remoteExtensions) {
-			await this.remoteExtensions.queryInstalled();
+			try {
+				await this.remoteExtensions.queryInstalled();
+			}
+			catch (error) {
+				this.logService.error(error);
+			}
 		}
 		if (this.webExtensions) {
-			await this.webExtensions.queryInstalled();
+			try {
+				await this.webExtensions.queryInstalled();
+			}
+			catch (error) {
+				this.logService.error(error);
+			}
 		}
 		return this.local;
 	}
@@ -673,6 +686,8 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 	}
 
 	private resolveQueryText(text: string): string {
+		text = text.replace(/@web/g, `tag:"${WEB_EXTENSION_TAG}"`);
+
 		const extensionRegex = /\bext:([^\s]+)\b/g;
 		if (extensionRegex.test(text)) {
 			text = text.replace(extensionRegex, (m, ext) => {
@@ -716,7 +731,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 			return extensionsToChoose[0];
 		}
 
-		const extensionKinds = this.extensionKindController.getExtensionKind(manifest);
+		const extensionKinds = this.extensionManifestPropertiesService.getExtensionKind(manifest);
 
 		let extension = extensionsToChoose.find(extension => {
 			for (const extensionKind of extensionKinds) {
@@ -792,7 +807,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 			this.webExtensions ? this.webExtensions.syncLocalWithGalleryExtension(gallery, maliciousExtensionSet) : Promise.resolve(false)
 		])
 			.then(result => {
-				if (result[0] || result[1]) {
+				if (result[0] || result[1] || result[2]) {
 					this.eventuallyAutoUpdateExtensions();
 				}
 			});
@@ -931,9 +946,13 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 		}
 
 		if (this.extensionManagementServerService.localExtensionManagementServer
-			|| this.extensionManagementServerService.remoteExtensionManagementServer
-			|| this.extensionManagementServerService.webExtensionManagementServer) {
+			|| this.extensionManagementServerService.remoteExtensionManagementServer) {
 			return true;
+		}
+
+		if (this.extensionManagementServerService.webExtensionManagementServer) {
+			const configuredExtensionKind = this.extensionManifestPropertiesService.getUserConfiguredExtensionKind(extension.gallery.identifier);
+			return configuredExtensionKind ? configuredExtensionKind.includes('web') : extension.gallery.webExtension;
 		}
 
 		return false;

@@ -8,13 +8,13 @@ import { escapeRegExpCharacters, isFalsyOrWhitespace } from 'vs/base/common/stri
 import { isArray, withUndefinedAsNull, isUndefinedOrNull } from 'vs/base/common/types';
 import { URI } from 'vs/base/common/uri';
 import { localize } from 'vs/nls';
-import { ConfigurationTarget, IConfigurationService, IConfigurationValue } from 'vs/platform/configuration/common/configuration';
+import { ConfigurationTarget, IConfigurationValue } from 'vs/platform/configuration/common/configuration';
 import { SettingsTarget } from 'vs/workbench/contrib/preferences/browser/preferencesWidgets';
 import { ITOCEntry, knownAcronyms, knownTermMappings, tocData } from 'vs/workbench/contrib/preferences/browser/settingsLayout';
 import { MODIFIED_SETTING_TAG, REQUIRE_TRUSTED_WORKSPACE_SETTING_TAG } from 'vs/workbench/contrib/preferences/common/preferences';
 import { IExtensionSetting, ISearchResult, ISetting, SettingValueType } from 'vs/workbench/services/preferences/common/preferences';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
-import { FOLDER_SCOPES, WORKSPACE_SCOPES, REMOTE_MACHINE_SCOPES, LOCAL_MACHINE_SCOPES } from 'vs/workbench/services/configuration/common/configuration';
+import { FOLDER_SCOPES, WORKSPACE_SCOPES, REMOTE_MACHINE_SCOPES, LOCAL_MACHINE_SCOPES, IWorkbenchConfigurationService } from 'vs/workbench/services/configuration/common/configuration';
 import { IJSONSchema } from 'vs/base/common/jsonSchema';
 import { Disposable } from 'vs/base/common/lifecycle';
 import { Emitter } from 'vs/base/common/event';
@@ -176,7 +176,7 @@ export class SettingsTreeSettingElement extends SettingsTreeElement {
 		switch (targetSelector) {
 			case 'workspaceFolderValue':
 			case 'workspaceValue':
-				this.isUntrusted = !!this.setting.requireTrust && !isWorkspaceTrusted;
+				this.isUntrusted = !!this.setting.restricted && !isWorkspaceTrusted;
 				break;
 		}
 
@@ -199,7 +199,7 @@ export class SettingsTreeSettingElement extends SettingsTreeElement {
 		this.defaultValue = inspected.defaultValue;
 
 		this.isConfigured = isConfigured;
-		if (isConfigured || this.setting.tags || this.tags || this.isUntrusted) {
+		if (isConfigured || this.setting.tags || this.tags || this.setting.restricted) {
 			// Don't create an empty Set for all 1000 settings, only if needed
 			this.tags = new Set<string>();
 			if (isConfigured) {
@@ -210,7 +210,7 @@ export class SettingsTreeSettingElement extends SettingsTreeElement {
 				this.setting.tags.forEach(tag => this.tags!.add(tag));
 			}
 
-			if (this.isUntrusted) {
+			if (this.setting.restricted) {
 				this.tags.add(REQUIRE_TRUSTED_WORKSPACE_SETTING_TAG);
 			}
 		}
@@ -236,8 +236,8 @@ export class SettingsTreeSettingElement extends SettingsTreeElement {
 			this.valueType = SettingValueType.Number;
 		} else if (this.setting.type === 'boolean') {
 			this.valueType = SettingValueType.Boolean;
-		} else if (this.setting.type === 'array' && this.setting.arrayItemType === 'string') {
-			this.valueType = SettingValueType.ArrayOfString;
+		} else if (this.setting.type === 'array' && (this.setting.arrayItemType === 'string' || this.setting.arrayItemType === 'enum')) {
+			this.valueType = SettingValueType.StringOrEnumArray;
 		} else if (isArray(this.setting.type) && this.setting.type.indexOf(SettingValueType.Null) > -1 && this.setting.type.length === 2) {
 			if (this.setting.type.indexOf(SettingValueType.Integer) > -1) {
 				this.valueType = SettingValueType.NullableInteger;
@@ -248,6 +248,8 @@ export class SettingsTreeSettingElement extends SettingsTreeElement {
 			}
 		} else if (isObjectSetting(this.setting)) {
 			this.valueType = SettingValueType.Object;
+		} else if (this.setting.allKeysAreBoolean) {
+			this.valueType = SettingValueType.BooleanObject;
 		} else {
 			this.valueType = SettingValueType.Complex;
 		}
@@ -353,7 +355,7 @@ export class SettingsTreeModel {
 	constructor(
 		protected _viewState: ISettingsEditorViewState,
 		private _isWorkspaceTrusted: boolean,
-		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@IWorkbenchConfigurationService private readonly _configurationService: IWorkbenchConfigurationService,
 	) {
 	}
 
@@ -466,14 +468,25 @@ interface IInspectResult {
 	targetSelector: 'userLocalValue' | 'userRemoteValue' | 'workspaceValue' | 'workspaceFolderValue';
 }
 
-function inspectSetting(key: string, target: SettingsTarget, configurationService: IConfigurationService): IInspectResult {
+export function inspectSetting(key: string, target: SettingsTarget, configurationService: IWorkbenchConfigurationService): IInspectResult {
 	const inspectOverrides = URI.isUri(target) ? { resource: target } : undefined;
 	const inspected = configurationService.inspect(key, inspectOverrides);
 	const targetSelector = target === ConfigurationTarget.USER_LOCAL ? 'userLocalValue' :
 		target === ConfigurationTarget.USER_REMOTE ? 'userRemoteValue' :
 			target === ConfigurationTarget.WORKSPACE ? 'workspaceValue' :
 				'workspaceFolderValue';
-	const isConfigured = typeof inspected[targetSelector] !== 'undefined';
+	let isConfigured = typeof inspected[targetSelector] !== 'undefined';
+	if (!isConfigured) {
+		if (target === ConfigurationTarget.USER_LOCAL) {
+			isConfigured = !!configurationService.restrictedSettings.userLocal?.includes(key);
+		} else if (target === ConfigurationTarget.USER_REMOTE) {
+			isConfigured = !!configurationService.restrictedSettings.userRemote?.includes(key);
+		} else if (target === ConfigurationTarget.WORKSPACE) {
+			isConfigured = !!configurationService.restrictedSettings.workspace?.includes(key);
+		} else if (target instanceof URI) {
+			isConfigured = !!configurationService.restrictedSettings.workspaceFolder?.get(target)?.includes(key);
+		}
+	}
 
 	return { isConfigured, inspected, targetSelector };
 }
@@ -622,7 +635,7 @@ export class SearchResultModel extends SettingsTreeModel {
 	constructor(
 		viewState: ISettingsEditorViewState,
 		isWorkspaceTrusted: boolean,
-		@IConfigurationService configurationService: IConfigurationService,
+		@IWorkbenchConfigurationService configurationService: IWorkbenchConfigurationService,
 		@IWorkbenchEnvironmentService private environmentService: IWorkbenchEnvironmentService,
 	) {
 		super(viewState, isWorkspaceTrusted, configurationService);
@@ -690,7 +703,7 @@ export class SearchResultModel extends SettingsTreeModel {
 		const isRemote = !!this.environmentService.remoteAuthority;
 
 		this.root.children = this.root.children
-			.filter(child => child instanceof SettingsTreeSettingElement && child.matchesAllTags(this._viewState.tagFilters) && child.matchesScope(this._viewState.settingsTarget, isRemote) && child.matchesAnyExtension(this._viewState.extensionFilters) && child.matchesAnyId(this._viewState.idFilters) && (this.containsValidFeature() ? child.matchesAnyFeature(this._viewState.featureFilters) : true));
+			.filter(child => child instanceof SettingsTreeSettingElement && child.matchesAllTags(this._viewState.tagFilters) && child.matchesScope(this._viewState.settingsTarget, isRemote) && child.matchesAnyExtension(this._viewState.extensionFilters) && child.matchesAnyId(this._viewState.idFilters) && child.matchesAnyFeature(this._viewState.featureFilters));
 
 		if (this.newExtensionSearchResults && this.newExtensionSearchResults.filterMatches.length) {
 			const resultExtensionIds = this.newExtensionSearchResults.filterMatches
@@ -701,22 +714,6 @@ export class SearchResultModel extends SettingsTreeModel {
 			const newExtElement = new SettingsTreeNewExtensionsElement('newExtensions', arrays.distinct(resultExtensionIds));
 			newExtElement.parent = this._root;
 			this._root.children.push(newExtElement);
-		}
-	}
-
-	private containsValidFeature(): boolean {
-		if (!this._viewState.featureFilters || !this._viewState.featureFilters.size || !tocData.children) {
-			return false;
-		}
-
-		const features = tocData.children.find(child => child.id === 'features');
-
-		if (features && features.children) {
-			return Array.from(this._viewState.featureFilters).some(filter => {
-				return features.children?.find(feature => 'features/' + filter === feature.id);
-			});
-		} else {
-			return false;
 		}
 	}
 

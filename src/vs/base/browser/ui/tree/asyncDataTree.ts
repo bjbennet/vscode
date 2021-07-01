@@ -881,6 +881,10 @@ export class AsyncDataTree<TInput, T, TFilterData = void> implements IDisposable
 						asyncDataTreeNode.children.forEach(node => dfs(node, node => this.nodes.delete(node.element as T)));
 						asyncDataTreeNode.children.splice(0, asyncDataTreeNode.children.length);
 						asyncDataTreeNode.stale = true;
+						if (this.collapseByDefault && !this.collapseByDefault(element)) {
+							asyncDataTreeNode.collapsedByDefault = false;
+							childrenToRefresh.push(asyncDataTreeNode);
+						}
 					} else {
 						childrenToRefresh.push(asyncDataTreeNode);
 					}
@@ -1131,7 +1135,7 @@ export interface ICompressibleAsyncDataTreeOptionsUpdate extends IAsyncDataTreeO
 
 export class CompressibleAsyncDataTree<TInput, T, TFilterData = void> extends AsyncDataTree<TInput, T, TFilterData> {
 
-	protected readonly tree!: CompressibleObjectTree<IAsyncDataTreeNode<TInput, T>, TFilterData>;
+	protected override readonly tree!: CompressibleObjectTree<IAsyncDataTreeNode<TInput, T>, TFilterData>;
 	protected readonly compressibleNodeMapper: CompressibleAsyncDataTreeNodeMapper<TInput, T, TFilterData> = new WeakMapper(node => new CompressibleAsyncDataTreeNodeWrapper(node));
 	private filter?: ITreeFilter<T, TFilterData>;
 

@@ -4,35 +4,42 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from 'vs/base/common/uri';
-import { IProgress } from 'vs/platform/progress/common/progress';
-import { TestItem, TestResultState } from 'vs/workbench/api/common/extHostTypes';
+import { TestItemImpl, TestResultState } from 'vs/workbench/api/common/extHostTypes';
+import { MainThreadTestCollection } from 'vs/workbench/contrib/testing/common/mainThreadTestCollection';
+import { TestSingleUseCollection } from 'vs/workbench/contrib/testing/test/common/ownedTestCollection';
 
-export class StubTestItem extends TestItem {
-	parent: StubTestItem | undefined;
+export * as Convert from 'vs/workbench/api/common/extHostTypeConverters';
+export { TestItemImpl, TestResultState } from 'vs/workbench/api/common/extHostTypes';
 
-	constructor(id: string, label: string, private readonly pendingChildren: StubTestItem[]) {
-		super(id, label, URI.file('/'), pendingChildren.length > 0);
-	}
-
-	public override discoverChildren(progress: IProgress<{ busy: boolean }>) {
-		for (const child of this.pendingChildren) {
-			this.children.add(child);
-		}
-
-		progress.report({ busy: false });
-	}
-}
-
-export const stubTest = (label: string, idPrefix = 'id-', children: StubTestItem[] = []): StubTestItem => {
-	return new StubTestItem(idPrefix + label, label, children);
+/**
+ * Gets a main thread test collection initialized with the given set of
+ * roots/stubs.
+ */
+export const getInitializedMainTestCollection = async (singleUse = testStubs.nested()) => {
+	const c = new MainThreadTestCollection(async (t, l) => singleUse.expand(t.testId, l));
+	await singleUse.expand(singleUse.root.id, Infinity);
+	c.apply(singleUse.collectDiff());
+	return c;
 };
 
 export const testStubs = {
-	test: stubTest,
-	nested: (idPrefix = 'id-') => stubTest('root', idPrefix, [
-		stubTest('a', idPrefix, [stubTest('aa', idPrefix), stubTest('ab', idPrefix)]),
-		stubTest('b', idPrefix),
-	]),
+	nested: (idPrefix = 'id-') => {
+		const collection = new TestSingleUseCollection('ctrlId');
+		collection.root.label = 'root';
+		collection.root.canResolveChildren = true;
+		collection.resolveHandler = item => {
+			if (item === collection.root) {
+				const a = new TestItemImpl(idPrefix + 'a', 'a', URI.file('/'), undefined, collection.root);
+				a.canResolveChildren = true;
+				new TestItemImpl(idPrefix + 'b', 'b', URI.file('/'), undefined, collection.root);
+			} else if (item.id === idPrefix + 'a') {
+				new TestItemImpl(idPrefix + 'aa', 'aa', URI.file('/'), undefined, item);
+				new TestItemImpl(idPrefix + 'ab', 'ab', URI.file('/'), undefined, item);
+			}
+		};
+
+		return collection;
+	},
 };
 
 export const ReExportedTestRunState = TestResultState;
