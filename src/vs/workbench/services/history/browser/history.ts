@@ -4,12 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from 'vs/nls';
-import { URI, UriComponents } from 'vs/base/common/uri';
+import { URI } from 'vs/base/common/uri';
 import { parse, stringify } from 'vs/base/common/marshalling';
 import { IEditor } from 'vs/editor/common/editorCommon';
-import { ITextEditorOptions, IResourceEditorInput, TextEditorSelectionRevealType, IEditorOptions, isResourceEditorInput } from 'vs/platform/editor/common/editor';
-import { IEditorInput, IEditorPane, IEditorCloseEvent, EditorResourceAccessor, IEditorIdentifier, GroupIdentifier, EditorsOrder, SideBySideEditor, IUntypedEditorInput, UntypedEditorContext } from 'vs/workbench/common/editor';
-import { EditorInput, isEditorInput } from 'vs/workbench/common/editor/editorInput';
+import { ITextEditorOptions, IResourceEditorInput, TextEditorSelectionRevealType, IEditorOptions } from 'vs/platform/editor/common/editor';
+import { IEditorInput, IEditorPane, IEditorCloseEvent, EditorResourceAccessor, IEditorIdentifier, GroupIdentifier, EditorsOrder, SideBySideEditor, IUntypedEditorInput, isResourceEditorInput, isEditorInput } from 'vs/workbench/common/editor';
+import { EditorInput } from 'vs/workbench/common/editor/editorInput';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IHistoryService } from 'vs/workbench/services/history/common/history';
 import { FileChangesEvent, IFileService, FileChangeType, FILES_EXCLUDE_CONFIG, FileOperationEvent, FileOperation } from 'vs/platform/files/common/files';
@@ -88,11 +88,6 @@ interface ISerializedEditorHistoryEntry {
 	 * support untyped editor inputs with `resource`.
 	 */
 	editor: IResourceEditorInput;
-
-	/**
-	 * @deprecated TODO@bpasero remove me after a few releases
-	 */
-	resourceJSON?: UriComponents;
 }
 
 interface IStackEntry {
@@ -595,7 +590,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 		// the entry across restarts
 		if (hasValidResourceEditorInputScheme) {
 			if (input instanceof EditorInput) {
-				const untypedInput = input.toUntyped(undefined, UntypedEditorContext.Default);
+				const untypedInput = input.toUntyped();
 				if (isResourceEditorInput(untypedInput)) {
 					return untypedInput;
 				}
@@ -720,7 +715,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 			return; // ignore if editor was replaced
 		}
 
-		const untypedEditor = editor.toUntyped(event.groupId, UntypedEditorContext.Default);
+		const untypedEditor = editor.toUntyped();
 		if (!untypedEditor) {
 			return; // we need a untyped editor to restore from going forward
 		}
@@ -1009,11 +1004,15 @@ export class HistoryService extends Disposable implements IHistoryService {
 			// We want to seed history from opened editors
 			// too as well as previous stored state, so we
 			// need to wait for the editor groups being ready
-			(async () => {
-				await this.editorGroupService.whenReady;
-
+			if (this.editorGroupService.isReady) {
 				this.loadHistory();
-			})();
+			} else {
+				(async () => {
+					await this.editorGroupService.whenReady;
+
+					this.loadHistory();
+				})();
+			}
 		}
 	}
 
@@ -1078,29 +1077,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 			}
 		}
 
-		return coalesce(entries.map(entry => {
-			try {
-				return this.safeLoadHistoryEntry(entry);
-			} catch (error) {
-				return undefined; // https://github.com/microsoft/vscode/issues/60960
-			}
-		}));
-	}
-
-	private safeLoadHistoryEntry(entry: ISerializedEditorHistoryEntry): IResourceEditorInput | undefined {
-		const serializedEditorHistoryEntry = entry;
-
-		// Untyped editor: take as is
-		if (serializedEditorHistoryEntry.editor) {
-			return serializedEditorHistoryEntry.editor;
-		}
-
-		// Legacy: old `resourceJSON` format
-		if (serializedEditorHistoryEntry.resourceJSON) {
-			return { resource: URI.revive(serializedEditorHistoryEntry.resourceJSON) };
-		}
-
-		return undefined;
+		return coalesce(entries.map(entry => entry.editor));
 	}
 
 	private saveState(): void {

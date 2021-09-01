@@ -33,7 +33,8 @@ suite('Notebook Find', () => {
 				deltaDecorations: (oldDecorations: ICellModelDecorations[], newDecorations: ICellModelDeltaDecorations[]) => {
 					const ret: ICellModelDecorations[] = [];
 					newDecorations.forEach(dec => {
-						const cell = editor.viewModel.viewCells.find(cell => cell.handle === dec.ownerId);
+						const viewModel = editor._getViewModel();
+						const cell = viewModel.viewCells.find(cell => cell.handle === dec.ownerId);
 						const decorations = cell?.deltaModelDecorations([], dec.decorations) ?? [];
 
 						if (decorations.length > 0) {
@@ -73,7 +74,7 @@ suite('Notebook Find', () => {
 
 				editor.textModel.applyEdits([{
 					editType: CellEditType.Replace, index: 3, count: 0, cells: [
-						new TestCell(editor.viewModel.viewType, 3, '# next paragraph 1', 'markdown', CellKind.Code, [], accessor.get(IModeService)),
+						new TestCell(viewModel.viewType, 3, '# next paragraph 1', 'markdown', CellKind.Code, [], accessor.get(IModeService)),
 					]
 				}], true, undefined, () => undefined, undefined, true);
 				assert.strictEqual(editor.textModel.length, 4);
@@ -184,12 +185,42 @@ suite('Notebook Find', () => {
 				model.find(false);
 				model.find(false);
 				assert.strictEqual(model.currentMatch, 2);
-				(editor.viewModel.viewCells[1].textBuffer as ITextBuffer).applyEdits([
+				(viewModel.viewCells[1].textBuffer as ITextBuffer).applyEdits([
 					new ValidAnnotatedEditOperation(null, new Range(1, 1, 1, 14), '', false, false, false)
 				], false, true);
 				// cell content updates, recompute
 				model.research();
 				assert.strictEqual(model.currentMatch, 1);
+			});
+	});
+
+	test('Reset when match not found, #127198', async function () {
+		await withTestNotebook(
+			[
+				['# header 1', 'markdown', CellKind.Markup, [], {}],
+				['paragraph 1', 'markdown', CellKind.Markup, [], {}],
+				['paragraph 2', 'markdown', CellKind.Markup, [], {}],
+			],
+			async (editor, viewModel, accessor) => {
+				accessor.stub(IConfigurationService, configurationService);
+				const state = new FindReplaceState();
+				const model = new FindModel(editor, state, accessor.get(IConfigurationService));
+				state.change({ isRevealed: true }, true);
+				state.change({ searchString: '1' }, true);
+				assert.strictEqual(model.findMatches.length, 2);
+				assert.strictEqual(model.currentMatch, -1);
+				model.find(false);
+				assert.strictEqual(model.currentMatch, 0);
+				model.find(false);
+				assert.strictEqual(model.currentMatch, 1);
+				model.find(false);
+				assert.strictEqual(model.currentMatch, 0);
+
+				assert.strictEqual(editor.textModel.length, 3);
+
+				state.change({ searchString: '3' }, true);
+				assert.strictEqual(model.currentMatch, -1);
+				assert.strictEqual(model.findMatches.length, 0);
 			});
 	});
 });

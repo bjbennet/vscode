@@ -47,6 +47,7 @@ import { NotebookOptions } from 'vs/workbench/contrib/notebook/common/notebookOp
 import { ViewContext } from 'vs/workbench/contrib/notebook/browser/viewModel/viewContext';
 import { OutputRenderer } from 'vs/workbench/contrib/notebook/browser/view/output/outputRenderer';
 import { Mimes } from 'vs/base/common/mime';
+import { VSBuffer } from 'vs/base/common/buffer';
 
 export class TestCell extends NotebookCellTextModel {
 	constructor(
@@ -196,10 +197,14 @@ function _createTestNotebookEditor(instantiationService: TestInstantiationServic
 		override notebookOptions = notebookOptions;
 		override onDidChangeModel: Event<NotebookTextModel | undefined> = new Emitter<NotebookTextModel | undefined>().event;
 		override get viewModel() { return viewModel; }
+		override _getViewModel(): NotebookViewModel {
+			return viewModel;
+		}
 		override get textModel() { return viewModel.notebookDocument; }
 		override hasModel(): this is IActiveNotebookEditor {
 			return !!this.viewModel;
 		}
+		override getLength() { return viewModel.length; }
 		override getFocus() { return viewModel.getFocus(); }
 		override getSelections() { return viewModel.getSelections(); }
 		override setFocus(focus: ICellRange) {
@@ -241,6 +246,11 @@ function _createTestNotebookEditor(instantiationService: TestInstantiationServic
 		override getOutputRenderer() { return new OutputRenderer(notebookEditor, instantiationService); }
 		override async layoutNotebookCell() { }
 		override async removeInset() { }
+		override async focusNotebookCell() { }
+		override cellAt(index: number) { return viewModel.cellAt(index)!; }
+		override getCellIndex(cell: ICellViewModel) { return viewModel.getCellIndex(cell); }
+		override getCellIndexByHandle(handle: number) { return viewModel.getCellIndexByHandle(handle); }
+		override getCellsInRange(range?: ICellRange) { return viewModel.getCells(range); }
 	};
 
 	return { editor: notebookEditor, viewModel };
@@ -345,6 +355,6 @@ export function createNotebookCellList(instantiationService: TestInstantiationSe
 	return cellList;
 }
 
-export function valueBytesFromString(value: string) {
-	return new TextEncoder().encode(value);
+export function valueBytesFromString(value: string): VSBuffer {
+	return VSBuffer.fromString(value);
 }
