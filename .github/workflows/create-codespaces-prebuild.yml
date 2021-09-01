@@ -13,5 +13,7 @@ jobs:
         with:
           regions: WestUs2
           sku_name: standardLinux32gb
+          target: local
+          vscs_target_url: https://codespaces.servicebus.windows.net/brbenn
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
